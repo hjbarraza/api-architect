@@ -1,7 +1,7 @@
 {
   "name": "api-architect",
-  "version": "0.1.0",
-  "description": "Skills and agents for designing, implementing, reviewing, and evolving APIs — manual-driven, contract-first, with reviewer agents that verify behavior.",
+  "version": "0.2.0",
+  "description": "Manual-driven, contract-first plugin for the full API lifecycle — design, implement, test, review, document, evolve, discover — with reviewer agents, a manual-injection hook, schema-diff/smoke-verify scripts, and a compatibility Action.",
   "author": {
     "name": "hjbarraza",
     "url": "https://github.com/hjbarraza"
@@ -13,6 +13,8 @@
     "openapi",
     "contract-first",
     "code-review",
+    "testing",
+    "documentation",
     "backend",
     "architecture"
   ]

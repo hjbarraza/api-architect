@@ -1,0 +1,27 @@
+{
+  "description": "Injects the api-architect manual pointer as context so API work is grounded in the bundled source of truth, not memory. SessionStart puts the manual's location and operating loop on the record from turn one. UserPromptSubmit re-attaches the same reminder before each user turn — both are events that CAN inject context via hookSpecificOutput.additionalContext. The script self-detects API-shaped prompts and stays quiet otherwise, and dedupes so the reminder is injected at most once per session after the SessionStart shot.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-manual.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-manual.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

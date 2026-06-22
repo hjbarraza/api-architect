@@ -6,13 +6,13 @@ description: "This skill should be used when the user wants to evolve, version, 
 <objective>
 Change and run an API after it ships — without breaking the clients depending on it. This is the EVOLVE/OPERATE phase router for the api-architect plugin. It owns four manual sections: **Compatibility**, **Release and Evolution** (expand-and-contract, schema-diff CI gate, versioning, API registry), **Observability and Operations**, and **Async and Event APIs** (events, sagas, per-capability CAP, reporting database).
 
-This SKILL.md is a router, not the knowledge. It selects a workflow and points into the manual. The manual at `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` is the **source of truth**; if this skill and the manual ever disagree, **the manual wins**.
+This SKILL.md is a router, not the knowledge. It selects a workflow and points into the manual at `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md`, which is read live at decision time. (The umbrella api-architect skill states the manual's authority once for the whole plugin.)
 </objective>
 
 <essential_principles>
 These apply to every workflow below and cannot be skipped.
 
-**1. The manual is authoritative; route, never paraphrase.**
+**1. Route, never paraphrase.**
 Read the owned sections live from the manual at decision time. Do not answer compatibility, release, observability, or async questions from memory or from a summary baked into this file — APIs break on the exact rule, not the gist.
 
 **2. Compatibility is the default contract.**
@@ -56,7 +56,7 @@ Read these live, now, before doing anything else:
    - Plus always the framing sections: **Agent Contract**, **Clarify vs. Assume**, **Defaults Table**, and the **Security Manual** (`## Security Manual`).
 2. Read `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md` in full — it governs the parity/CRUD requirement in essential principle 6.
 
-State plainly to yourself: the manual is the source of truth; if this skill and the manual disagree, the manual wins. Do not proceed on memory.
+Do not proceed on memory; read the owned sections live.
 
 **Step 2 — Route.**
 Use the table to pick the workflow lens, then apply the matching manual section(s) read in Step 1.
@@ -66,6 +66,17 @@ Ask the user only when the missing fact is breaking or irreversible: a compatibi
 
 **Step 4 — Execute, verifying against the manual.**
 Do the work the manual prescribes for the route. Surgical changes only. Then run the success criteria below before claiming done.
+
+For any contract change (routes 1, 2), prove the compatibility verdict with the bundled schema-diff script — it exits non-zero on a breaking change, so it doubles as the CI gate:
+
+```sh
+# OpenAPI: compare the published/base spec against the revised one
+git show origin/main:openapi.yaml > openapi.base.yaml
+scripts/schema-diff.sh openapi.base.yaml openapi.yaml
+# Proto: scripts/schema-diff.sh --proto [proto-root]
+```
+
+A non-zero exit means the change is breaking — route to versioning/expand-and-contract, do not ship it as compatible. Wire the same command into CI as the standing schema-diff gate.
 </process>
 
 <routing>
@@ -77,11 +88,11 @@ Do the work the manual prescribes for the route. Surgical changes only. Then run
 | 4, "event", "webhook", "saga", "idempotent consumer", "CAP", "CP vs AP", "reporting database", "read model", "queue" | Async and Event APIs; Idempotency and Retries; Security Manual | Events = past-tense facts with id/timestamp/producer+schema-version/correlation; idempotent consumers; saga orchestration vs. choreography; CP-vs-AP per capability; reporting DB as a versioned contract, never direct table access. |
 | 5, other | Clarify, then route | — |
 
-**After selecting, follow the manual section exactly. The manual wins over this table.**
+**After selecting, follow the manual section exactly.**
 </routing>
 
 <quick_start>
-Fast orientation only — **the manual is authoritative; verify there before acting.** Do step 1 (load the manual + addendum) before relying on any of this.
+Fast orientation only — verify in the manual before acting. Do step 1 (load the manual + addendum) before relying on any of this.
 
 - **Break-avoidance order (operating stance):** expansion change → tolerant reader → schema-diff CI gate → expand-and-contract → (only then) version.
 - **Don't recall the rules — route.** The exact compatible-vs-breaking lists (REST and protobuf), the event envelope, per-capability CAP guidance, and the canonical do-not-log list all live in the manual's owned sections. Read them live there per the routing table; do not act on a memorized version.
@@ -90,7 +101,7 @@ Fast orientation only — **the manual is authoritative; verify there before act
 <reference_index>
 All authoritative knowledge lives in the manual; this skill only routes into it.
 
-- `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — source of truth. Owned sections: **Compatibility**, **Release and Evolution**, **Observability and Operations**, **Async and Event APIs**. Always also read: Agent Contract, Clarify vs. Assume, Defaults Table, Security Manual.
+- `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — owned sections: **Compatibility**, **Release and Evolution**, **Observability and Operations**, **Async and Event APIs**. Always also read: Agent Contract, Clarify vs. Assume, Defaults Table, Security Manual.
 - `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md` — parity/CRUD + outcomes-not-workflows requirements for every action and entity this phase touches.
 </reference_index>
 
@@ -99,7 +110,7 @@ The evolution/operation is well-handled when:
 - The relevant owned manual section(s) and the agent-native addendum were read **live** this session, not recalled.
 - Every contract change is explicitly classified compatible vs. breaking under **both** the REST and protobuf rules; breaking changes are acknowledged as such and not shipped silently.
 - Versioning was reached for only after expansion changes, tolerant readers, the schema-diff gate, and expand-and-contract were considered.
-- A schema-diff compatibility gate exists (or its absence is flagged) for any contract change; risky changes have a controlled-release path and a rollback plan.
+- A schema-diff compatibility gate exists (or its absence is flagged) for any contract change — verified with `scripts/schema-diff.sh`; risky changes have a controlled-release path and a rollback plan.
 - Retired endpoints are de-registered and routes removed — not merely labeled deprecated.
 - Operability work meets the minimum telemetry set and never logs anything on the do-not-log list; SLOs and graceful-degradation decisions are named.
 - Async designs use past-tense events with the required envelope, idempotent consumers, an explicit per-capability CP-vs-AP choice, and a reporting store treated as a versioned contract (no direct table access).

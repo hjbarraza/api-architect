@@ -8,7 +8,7 @@
     {
       "name": "api-architect",
       "source": "./",
-      "description": "Skills and agents for designing, implementing, reviewing, and evolving APIs — manual-driven, contract-first, with reviewer agents that verify behavior."
+      "description": "Manual-driven, contract-first plugin for the full API lifecycle — design, implement, test, review, document, evolve, discover — with reviewer agents, a manual-injection hook, schema-diff/smoke-verify scripts, and a compatibility Action."
     }
   ]
 }

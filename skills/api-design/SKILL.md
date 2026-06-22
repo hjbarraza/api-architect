@@ -8,7 +8,7 @@ Drive the DESIGN phase of an API: turn a request into a clarified scope, a chose
 </objective>
 
 <authority>
-**The manual is the source of truth. If this skill and the manual disagree, the manual wins.** This SKILL.md is a router and a checklist — all design rules, tables, and rationale live in the manual and the addendum. Do not design from memory; read the relevant manual sections live each time.
+This SKILL.md is a router and a checklist — all design rules, tables, and rationale live in the manual and the addendum. Do not design from memory; read the relevant manual sections live each time. (The umbrella api-architect skill states the manual's authority once for the whole plugin; it is not repeated here.)
 
 Two reference files (read live, never paraphrase from here):
 - `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — the API Design and Development Manual.
@@ -18,31 +18,46 @@ Two reference files (read live, never paraphrase from here):
 <essential_principles>
 These apply to every design task and cannot be skipped:
 
-1. **Clarify vs. Assume.** Ask the user only when the missing fact is breaking or irreversible — auth/tenancy model, data ownership, a compatibility promise to existing clients, or a destructive operation's blast radius. Assume and document everything else, then proceed on the manual's no-details defaults. Record every assumption in the API Brief. (Manual: "Clarify vs. Assume", "Intake Checklist", "Defaults Table".)
-2. **Contract first.** Produce or update the spec (OpenAPI / protobuf / AsyncAPI / the repo's format) before any implementation. The contract is the deliverable of this phase. (Manual: "Default Operating Loop" step 4, "Templates".)
-3. **Smallest correct boundary, smallest correct style.** Do not split services without a named reason; default to REST/resource-oriented HTTP + JSON and add a second style only for a named separable need. Name the coupling you create. (Manual: "Boundary Rules", "Coupling Diagnosis", "API Style Decision Matrix".)
-4. **Security starts in design.** Auth model, per-endpoint and per-resource authorization, write-path field allow-listing, validation, and abuse controls are designed now — the gateway is defense-in-depth, never the authority. (Manual: "Security Manual" — required reading for every design task.)
-5. **Agent-native parity.** Every user-facing action and every entity in the design must have an agent path with full create/read/update/delete. No orphan UI actions. Produce a capability map. (Addendum.)
+1. **Clarify vs. Assume — gate, not questionnaire.** Ask the user only when the missing fact is breaking or irreversible — auth/tenancy model, data ownership, a compatibility promise to existing clients, or a destructive operation's blast radius. **One question per message; wait for the answer before the next.** Assume and document everything else, then proceed on the manual's no-details defaults. Record every assumption in the API Brief. (Manual: "Clarify vs. Assume", "Intake Checklist", "Defaults Table".)
+2. **Offer approaches before committing.** For any non-trivial surface, present 2-3 approaches (e.g. boundary or style options) with trade-offs and lead with a recommendation; let the user pick before drafting the contract. Skip only for a single-answer focused decision.
+3. **Confirm the Brief before building.** Self-review the API Brief (placeholder scan, internal consistency, scope, ambiguity) then ask the user to confirm it before producing the contract draft. No contract is built on an unconfirmed Brief.
+4. **No placeholders.** The Brief, the contract, and the endpoint-design notes ship complete — never `TODO`, `TBD`, stub schemas, or "fill in later". An undecided point is an explicit open question for the user, not a silent gap.
+5. **Contract first.** Produce or update the spec (OpenAPI / protobuf / AsyncAPI / the repo's format) before any implementation. The contract is the deliverable of this phase. (Manual: "Default Operating Loop" step 4, "Templates".)
+6. **Smallest correct boundary, smallest correct style.** Do not split services without a named reason; default to REST/resource-oriented HTTP + JSON and add a second style only for a named separable need. Name the coupling you create. (Manual: "Boundary Rules", "Coupling Diagnosis", "API Style Decision Matrix".)
+7. **Security starts in design.** Auth model, per-endpoint and per-resource authorization, write-path field allow-listing, validation, and abuse controls are designed now — the gateway is defense-in-depth, never the authority. (Manual: "Security Manual" — required reading for every design task.)
+8. **Agent-native parity — scoped.** A capability map (every user-facing action and every entity has an agent-reachable path with full create/read/update/delete; no orphan UI actions) is **REQUIRED** when the API is **agent-facing** (an LLM/MCP caller is a named consumer) **or backs a UI**. For a pure internal service-to-service or partner-webhook API with no agent consumer and no UI, parity is **ADVISORY** — note where a future agent path would go, but do not block the design on it. (Addendum.)
 </essential_principles>
 
 <quick_start>
 Before anything else, read the relevant manual sections AND the addendum live:
 
 1. From `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md`, read the sections this skill owns (see `<manual_sections_owned>`). Always read the **Security Manual** section — security is cross-cutting and starts at design.
-2. Then read `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md` in full — parity + CRUD shape every design.
+2. Then read `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md` — parity + CRUD shape every agent-facing or UI-backing design (see principle 8 for scope).
 
-Read the workflow-specific sections named in `<routing>` for the chosen task. Do not proceed on memory of the manual; it changes and it wins.
+Read the workflow-specific sections named in `<routing>` for the chosen task. Do not proceed on memory of the manual.
 </quick_start>
 
 <intake>
-**Ask the user:**
+Run a gated intake — fix the task, offer the optional grounding gate, then clarify only breaking unknowns one at a time, then offer approaches.
+
+**Step 1 — fix the task. Ask:**
 
 What is the design task?
 1. New API surface from scratch (clarify → boundary → style → full contract draft)
 2. Add or revise endpoints / resources on an existing API
 3. A focused decision only (style choice, boundary, status codes, pagination, idempotency, error shape)
 
-**Wait for the answer, then run the Intake Checklist (manual) and apply Clarify-vs-Assume before designing.**
+**Step 2 — offer the OPTIONAL grounding gate (auto-detect, then ask ONE question at start).** Reading the existing code/contracts is OPTIONAL and skippable — never forced. First auto-detect signals of existing code/contracts in the working dir: a repo (`.git`; `src`/`app`/`lib` dirs), API specs (`openapi*.{yaml,yml,json}`, `*.proto`, `asyncapi*`), package manifests (`package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml`, `pom.xml`). Then ask one question:
+- **Signals detected** → "Found existing code/contracts — ground the design by reading them (recommended), or design greenfield?"
+- **None detected** → "Greenfield, or point me to external contracts (deps/partners/upstream specs) to read?"
+
+Only if the user opts in, run the grounding read: LOCAL (data models/schema, existing routes/handlers, services, callers, repo conventions = error shape, auth, pagination, naming) + EXTERNAL (dependency/partner/upstream OpenAPI/proto/AsyncAPI). Output: an **existing-surface map** + the **GAP** (which resources/endpoints to develop and how they fit) that feeds the contract-first design. You may delegate the read mechanics to the **api-discover** skill (its grounding-read job). If the user declines, proceed greenfield — no grounding read. Either way continue to Step 3.
+
+**Step 3 — clarify the gate, not the questionnaire.** Run the Intake Checklist (manual) and apply Clarify-vs-Assume: ask **only** on breaking/irreversible unknowns (auth/tenancy, data ownership, compatibility promise, destructive blast radius) — **one question per message, wait for each answer**. Assume-and-document the rest in the API Brief. One of the facts to establish here: **is the API agent-facing or UI-backing?** — it sets whether parity is required or advisory (principle 8).
+
+**Step 4 — offer approaches.** For options 1-2, present 2-3 approaches (boundary/style/shape) with trade-offs and a recommendation; let the user pick. For option 3, just make the decision with its trade-off.
+
+**Step 5 — write the Brief, self-review it, and get user confirmation before drafting any contract.**
 </intake>
 
 <routing>
@@ -106,10 +121,14 @@ In `templates/` (copied/adapted from the manual's Templates section):
 <success_criteria>
 The DESIGN phase is complete when:
 - [ ] The relevant manual sections and the addendum were read live this session (not from memory).
-- [ ] Intake Checklist answered; Clarify-vs-Assume applied; assumptions and open questions recorded in the API Brief.
+- [ ] Optional grounding gate offered at start: signals auto-detected, the user asked once whether to ground (or go greenfield); if opted in, an existing-surface map + gap were produced (read done here or via api-discover) and fed the contract; if declined, greenfield proceeded. The gate was offered, never forced.
+- [ ] Intake Checklist answered; Clarify-vs-Assume applied as a gate (only breaking unknowns asked, one at a time); assumptions and open questions recorded in the API Brief.
+- [ ] For non-trivial surfaces, 2-3 approaches were offered with a recommendation before the contract was drafted.
+- [ ] The API Brief was self-reviewed and user-confirmed before the contract draft was produced.
+- [ ] No placeholders: the Brief, contract, and endpoint-design notes are complete; any undecided point is an explicit open question, not a silent gap.
 - [ ] Boundary chosen with the coupling named; style chosen via the Decision Matrix with any second style justified.
 - [ ] A contract-first OpenAPI/proto/AsyncAPI draft exists, with list wrappers, validated filters, pagination, idempotency rules, PATCH/field-mask semantics, and worked examples.
 - [ ] Security checklist satisfied: auth, per-endpoint + per-resource authz, write-path allow-listing, validation, abuse controls, safe error/response shapes.
-- [ ] Agent-native parity holds: a capability map shows every user action and every entity has an agent CRUD path; no orphan UI actions.
+- [ ] Agent-native parity handled per scope: a capability map (every user action + entity has an agent CRUD path; no orphan UI actions) is present when the API is agent-facing or UI-backing; for a pure internal/partner-webhook API it is advisory and its absence is acknowledged, not a gap.
 - [ ] Every consequential fork has an ADR; every default override is documented.
 </success_criteria>

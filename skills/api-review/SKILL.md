@@ -12,7 +12,7 @@ This skill owns three manual sections — **Security Manual**, **Testing Matrix*
 </objective>
 
 <essential_principles>
-**1. The manual is the source of truth.** Every verdict traces to a line in `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md`. **If this skill and the manual disagree, the manual wins.** Do not review from memory of API best practices — read the owned sections live, every time, because they carry specifics (confused-deputy, mass-assignment field lists, contract-vs-component distinction) that generic knowledge omits.
+**1. Verdicts trace to the manual.** Every verdict traces to a line in `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md`. Do not review from memory of API best practices — read the owned sections live, every time, because they carry specifics (confused-deputy, mass-assignment field lists, contract-vs-component distinction) that generic knowledge omits. (The umbrella api-architect skill states the manual's authority once for the whole plugin.)
 
 **2. Adversarial, not confirmatory.** The reviewer's job is to find what is wrong, not to confirm what looks right. Default stance: the change has a defect somewhere; locate it. Treat the author's PR summary as the hypothesis to falsify. Absence of a negative test is itself a finding.
 
@@ -21,6 +21,8 @@ This skill owns three manual sections — **Security Manual**, **Testing Matrix*
 **4. Security is cross-cutting, never optional.** The Security Manual is **required reading for every review**, even when the diff looks purely additive. Authorization, mass assignment, and validation defects routinely hide in "small" changes. A review that skips security is not a review.
 
 **5. Block on the checklist, not on taste.** The bar is the **Pre-Merge Review Checklist** and the manual rules it points to — not personal style preferences. A finding is a BLOCK only if it violates a manual rule or leaves a checklist item unmet. Style nits are advisory, clearly separated from blocking findings.
+
+**6. Agent-native parity is scoped, not universal.** A missing agent path / orphan UI action is a **BLOCK only when the API under review is agent-facing** (an LLM/MCP caller is a named consumer) **or backs a UI**. For a pure internal service-to-service or partner-webhook API with no agent consumer and no UI, a parity gap is **ADVISORY** — note it, do not block on it. Establish which case applies during scope (intake / Step 1) and state it in the verdict.
 </essential_principles>
 
 <intake>
@@ -28,13 +30,15 @@ This skill owns three manual sections — **Security Manual**, **Testing Matrix*
 
 1. What is under review — a PR number/URL, a branch diff, or a set of changed files?
 2. Is this a public/sensitive API, an internal service, or a shared/external contract? (Determines security and compatibility depth.)
-3. Is there an existing contract (OpenAPI/protobuf) to diff against, and a prior published version?
+3. Is the API **agent-facing** (an LLM/MCP caller is a named consumer) **or does it back a UI** — or is it a pure internal service-to-service / partner-webhook API? (Determines whether agent-native parity is a BLOCK or advisory — principle 6.)
+4. Is there an existing contract (OpenAPI/protobuf) to diff against, and a prior published version?
+5. Does the change touch **events, webhooks, message queues, or sagas**? (Determines whether to also dispatch `api-async-reviewer`.)
 
-**Wait for response before proceeding** unless the diff and its risk class are already obvious.
+**Ask only what scope and risk class genuinely require, one point at a time; skip any the diff already answers.** Wait for response before proceeding unless the diff and its risk class are already obvious.
 </intake>
 
 <quick_start>
-The non-negotiable first move: **read the owned manual sections live before touching code** — Security Manual, Testing Matrix, Pre-Merge Review Checklist in `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md`, plus `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md`. The manual is the source of truth; if this skill and the manual disagree, the manual wins. Then dispatch the three bundled reviewer agents, run the checklist adversarially yourself, and write the PR summary. The full procedure is in `<process>` below.
+The non-negotiable first move: **read the owned manual sections live before touching code** — Security Manual, Testing Matrix, Pre-Merge Review Checklist in `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md`, plus `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md`. Then dispatch the bundled reviewer agents (add `api-async-reviewer` if the change touches events/webhooks/sagas), run the checklist adversarially yourself, and write the PR summary. The full procedure is in `<process>` below.
 </quick_start>
 
 <process>
@@ -54,13 +58,13 @@ API Review Progress:
 <step_0>
 **Read the source of truth NOW — before looking at any code.** This is the first operational step and it is not skippable.
 
-Read these sections of the manual live (the manual is the source of truth; if this skill and the manual disagree, the manual wins):
+Read these sections of the manual live, every time — do not review from memory:
 
 1. `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — **Security Manual** (threat model, authentication, authorization, write-path/mass-assignment, validation, abuse controls).
 2. `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — **Testing Matrix** (test types, contract-vs-component, CDC, integration boundaries, minimum endpoint test set).
 3. `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — **Pre-Merge Review Checklist** (the consolidated gate and its "Done when" bar).
 4. `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — **Error Design**, **Compatibility**, and **Release and Evolution** (needed to judge contract and compatibility findings).
-5. `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md` — the agent-native parity + CRUD rules. A review must confirm that every new user-facing action and entity has an agent-reachable path (tool/primitive with full create/read/update/delete), and that behavior lives in prompts/primitives, not choreographed code. An orphan UI action with no agent path is a BLOCK.
+5. `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md` — the agent-native parity + CRUD rules. **Apply per principle 6's scope:** when the API is agent-facing or UI-backing, confirm that every new user-facing action and entity has an agent-reachable path (tool/primitive with full create/read/update/delete) and that behavior lives in prompts/primitives, not choreographed code — an orphan UI action with no agent path is then a **BLOCK**. For a pure internal/partner-webhook API, a parity gap is **ADVISORY**.
 
 Do not paraphrase these into the review from memory. Re-read them so the verdicts cite current rules.
 </step_0>
@@ -74,13 +78,14 @@ Do not paraphrase these into the review from memory. Re-read them so the verdict
 </step_2>
 
 <step_3>
-**Dispatch this plugin's bundled reviewer agents — in parallel.** Use the Task tool to launch all three at once (they are independent). Reference them by name; they live in `${CLAUDE_PLUGIN_ROOT}/agents/`. Do not depend on any external plugin's reviewers.
+**Dispatch this plugin's bundled reviewer agents — in parallel.** Use the Task tool to launch the three core agents at once (they are independent), plus `api-async-reviewer` when the change touches events/webhooks/queues/sagas (intake Q5). Reference them by name; they live in `${CLAUDE_PLUGIN_ROOT}/agents/`. Do not depend on any external plugin's reviewers.
 
 | Agent | Lens | Owned concerns |
 |-------|------|----------------|
 | `api-contract-reviewer` | Contract correctness | Paths/methods/naming consistency; opaque IDs; explicit request/response/error schemas; status-code table adherence; pagination/filtering/field-mask semantics; docs/examples updated; **Testing Matrix** coverage incl. contract-vs-component and the minimum endpoint test set. |
 | `api-security-reviewer` | Security (adversarial) | The full **Security Manual**: authn; per-resource authorization at the data owner; confused-deputy; mass-assignment field allow-listing; edge validation + unknown-field rejection; abuse controls; safe errors; secrets. |
 | `api-compatibility-reviewer` | Backward compatibility | REST *and* protobuf compatibility rules; schema-diff gate; breaking-change detection behind "compatible" labels; rollout/rollback plan; deprecation lifecycle. |
+| `api-async-reviewer` *(only if the change touches events/webhooks/queues/sagas)* | Async/event correctness | Event envelope (past-tense fact + id/timestamp/producer/schema-version/correlation); idempotent consumers; saga orchestration vs. choreography; per-capability CP-vs-AP; webhook delivery/retry/signing; reporting store as a versioned contract. |
 
 Give each agent: the diff, the contract (+ prior version), the risk class, and an explicit instruction to read its owned manual sections live and to return findings as `BLOCK` / `ADVISORY` / `PASS` each citing a manual rule and a code/test artifact. Tell them to be adversarial — report the absence of a required negative test as a finding.
 </step_3>
@@ -97,7 +102,7 @@ Give each agent: the diff, the contract (+ prior version), the risk class, and a
 - Logs carry request IDs + safe error codes (nothing on the do-not-log list); latency/error metrics; readiness checks real dependencies.
 - Tests cover success **and meaningful failures** (CDC for shared APIs, real deps for integration); contract/docs/examples updated.
 - Compatibility impact stated (REST *and* protobuf); schema-diff gate passes; rollout/rollback plan for risky changes.
-- **Agent-native parity:** every new user action and entity has an agent-reachable CRUD path (addendum); behavior is prompt/primitive-driven, not hard-coded workflow.
+- **Agent-native parity (scoped — principle 6):** if the API is agent-facing or UI-backing, every new user action and entity has an agent-reachable CRUD path (addendum) and behavior is prompt/primitive-driven, not hard-coded workflow — a gap here is a BLOCK. For a pure internal/partner-webhook API, a parity gap is ADVISORY.
 
 For any line you cannot tie to evidence, the default verdict is **not met** (a finding), not "probably fine".
 </step_4>
@@ -123,7 +128,7 @@ Overall verdict is **MERGE-READY only when every BLOCK is resolved and the manua
 - **ADVISORY** — non-blocking improvement → may merge, note it.
 - **PASS** — verified with cited evidence (file+line / test name / diff hunk).
 
-The high-frequency BLOCK patterns (confused-deputy, mass-assignment, unsigned-identity-propagation, contract-test-as-behavior-coverage, broken-integration stubs, mislabeled breaking changes, orphan-action parity gaps) are not restated here — read them live in the manual's **Security Manual** and **Testing Matrix**, and the **agent-native addendum** for parity.
+The high-frequency BLOCK patterns (confused-deputy, mass-assignment, unsigned-identity-propagation, contract-test-as-behavior-coverage, broken-integration stubs, mislabeled breaking changes) are not restated here — read them live in the manual's **Security Manual** and **Testing Matrix**. Orphan-action parity gaps BLOCK only on agent-facing or UI-backing APIs (principle 6); read the **agent-native addendum** for the parity rule itself.
 </quick_reference>
 
 <security_checklist>
@@ -133,8 +138,6 @@ For each, cite code **and** test as evidence. A review that cannot cite evidence
 </security_checklist>
 
 <reference_index>
-**Source of truth.** The manual is authoritative; if this skill and the manual disagree, the manual wins.
-
 - `${CLAUDE_PLUGIN_ROOT}/references/api-manual.md` — **owned by this skill:** Security Manual, Testing Matrix, Pre-Merge Review Checklist. **Also read for review:** Error Design, Compatibility, Release and Evolution.
 - `${CLAUDE_PLUGIN_ROOT}/references/agent-native-addendum.md` — parity + CRUD rules; required reading every review.
 
@@ -143,6 +146,7 @@ For each, cite code **and** test as evidence. A review that cannot cite evidence
 - `api-contract-reviewer` — contract correctness + Testing Matrix coverage.
 - `api-security-reviewer` — full Security Manual, adversarial.
 - `api-compatibility-reviewer` — REST + protobuf compatibility, schema-diff, rollout.
+- `api-async-reviewer` — async/event correctness; dispatch only when the change touches events/webhooks/queues/sagas.
 
 **Template:**
 
@@ -152,9 +156,10 @@ For each, cite code **and** test as evidence. A review that cannot cite evidence
 <success_criteria>
 A well-executed api-review:
 - Read the owned manual sections (Security Manual, Testing Matrix, Pre-Merge Review Checklist) and the agent-native addendum **live before** inspecting code.
-- Dispatched all three bundled reviewer agents and integrated their findings.
+- Dispatched the three core bundled reviewer agents — plus `api-async-reviewer` when the change touched events/webhooks/queues/sagas — and integrated their findings.
 - Walked every Pre-Merge Review Checklist line adversarially, defaulting unproven items to "not met".
 - Produced a security pass that cites code + test for authorization and mass-assignment, every time.
+- Classified parity correctly by scope: a gap is a BLOCK on agent-facing/UI-backing APIs and ADVISORY on pure internal/partner-webhook APIs (principle 6).
 - Classified each finding as BLOCK / ADVISORY / PASS with a manual rule reference and a concrete artifact.
 - Issued a MERGE-READY verdict only when every BLOCK is resolved and the manual's "Done when" bar is met.
 - Delivered the PR summary from the template, verdict first, BLOCKs listed first.

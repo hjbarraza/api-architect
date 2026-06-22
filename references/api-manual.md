@@ -104,7 +104,7 @@ Rows are not exclusive; a real task may hit several. Default to REST and add a s
 | Long-running work | Operation/job resource | Avoids request timeouts and ambiguous completion |
 | Read aggregation across many services / BFF | GraphQL | Field selection + aggregation; can give one version over many APIs and a legacy facade |
 | Workflow across services | Saga | Keeps local transactions local |
-| Bulk import/export | Dedicated operation | Different semantics from CRUD |
+| Bulk import/export | Dedicated `:import`/`:export` op (LRO) wiring the API straight to an external store | Different semantics from CRUD; not backup/restore — see Import and Export |
 
 **GraphQL caveats** (do not pick it blindly): its sweet spot is the perimeter/BFF for *reads*. It fits writes poorly, can generate hard-to-trace server-side load (N+1 from client queries), and tempts an "API on a database" anti-pattern that re-couples the schema to your store. Avoid it for internal high-volume or write-heavy service-to-service calls, and never let the GraphQL schema mirror your database.
 
@@ -194,6 +194,44 @@ Expose an explicit `done` flag (do not infer completion from the result), a `res
 
 For expensive or destructive calls, consider a `validateOnly`/dry-run flag so clients can preview effects without executing.
 
+**Cancel, pause, resume.** Once you expose an operation resource, expose the verbs that interact with it — but only the ones that make sense for that job.
+
+- **Cancel** (`POST /operations/{id}:cancel`): an explicit `cancel` custom method, not a `DELETE`. It must block until the operation is fully aborted, then return the operation with `done: true` (`done` was chosen precisely because it does not imply success). Best-effort clean up any intermediate output; when you cannot, record references to the orphaned artifacts in `metadata` so the caller can clean up. Not every operation can be cancelled (you can't un-launch a rocket) — only add it where it benefits the user.
+- **Pause/resume** (`:pause`/`:resume`): optional, and a *different* status from `done` (a paused operation is not done). Do not add a top-level `paused` flag to every operation — signal pausability by a `paused` boolean in that operation's `metadata` type, so operations that can't be paused don't advertise a field that lies. Support these only where pausing the underlying work is both meaningful and implementable.
+- **Idempotency of all three.** `cancel`/`pause`/`resume` are state transitions on the operation — define what a repeat call does (cancelling an already-cancelled op, resuming a running op). Default: treat the terminal/declarative state as success or return `412` if you must distinguish "this call caused it" from "it was already so" (same imperative-vs-declarative rule as `DELETE`).
+
+### Soft Deletion
+
+An API recycle bin: mark a resource deleted instead of erasing it, so a mistaken `DELETE` is recoverable. Adopt it when accidental loss is costly and not when regulation demands true erasure (then prefer real backups). **Whether soft delete is even safe to add later is itself a compatibility decision** — changing `DELETE` from "gone now" to "gone in 30 days" can break callers' assumptions; treat it as potentially breaking and bump the major version.
+
+- **State.** Add an output-only `deleted` boolean (or a `deleted` value in an existing state enum — but a Boolean is cleaner because an enum can't say what state an *undelete* restores to). Output-only: attempts to set it via `PATCH` are silently ignored; only `DELETE`/`undelete` flip it.
+- **Standard-method changes.** `DELETE` becomes a marker (return the resource, not `204`); re-deleting an already-deleted resource returns `412` (imperative vs. declarative). `GET` still returns the resource (no `404`) — knowing the id is enough. `List` **excludes** deleted resources by default; add a `?showDeleted=true` (a.k.a. `includeDeleted`) flag to widen the set — keep this separate from `filter` (`filter` narrows, `showDeleted` widens; to see *only* deleted, pass both). Batch delete inherits the soft-delete behavior.
+- **Custom methods.** `:undelete` restores (errors `412` if not currently deleted). `:expunge` permanently removes — a separate method, not `DELETE ?expunge=true`, because a query param must not silently change a verb's meaning and method-level permissions are easier to grant than param-conditional ones. Expunge should work whether or not the resource was soft-deleted first.
+- **Expiration default.** Set an `expireTime` when soft-deleting (e.g. now + 30 days), computed at delete time so policy changes only affect future deletions; reset to null on undelete. Expired resources are then expunged automatically.
+- **Referential integrity is unchanged.** Whatever rule the hard `DELETE` enforced (restrict / cascade / dangling reference) carries over verbatim to soft delete — don't invent new reference behavior just because the row still exists.
+
+### Resource Revisions
+
+Snapshots of a resource as it changes over time, for history, diffing, and rollback (contracts, documents, campaigns). Costly in storage and complexity — **avoid unless a firm requirement** (e.g. legal records). It is not the same as import/export or backup.
+
+- **Shape.** No separate interface — add `revisionId` + `revisionCreateTime` to the resource. Multiple records share one `id`; each has a distinct `revisionId`. Use a random opaque revision id (not an incrementing number — gaps after deletion leak that a revision was removed; not a timestamp — collisions), shorter than a resource id is fine, keep a checksum char.
+- **Latest is an alias.** `GET /resources/{id}` returns the newest revision (max `revisionCreateTime`) with `revisionId` populated. Address a specific revision with an `@` separator: `GET /resources/{id}@{revisionId}`. Invariant: *you get back exactly the id you asked for* — ask without `@`, the returned `id` has no `@`; ask with it, the returned `id` includes it.
+- **Implicit vs. explicit.** Implicit = a new revision on every modification (safest, most history; what Google Docs / GitHub issues do). Explicit = `:createRevision` on demand. Pick **one strategy and apply it across all revisable resources** — mixing surprises callers. Either way, a revision must exist from creation.
+- **Operations.** `:listRevisions` (paginated) and `:deleteRevision` use custom methods, not the standard list/delete — overloading `DELETE` risks confusing "delete one revision" with "delete the resource and all its revisions." Deleting the *current* revision is rejected (`412`). Revisions are hard-deleted only (so you can purge leaked secrets); they are not themselves soft-deletable.
+- **Restore = rollback by copy-forward.** `:restoreRevision` reads an old revision and writes it as a *new* latest revision — it never moves an old revision to the front or rewrites history, so the timeline stays honest. Provide it as an atomic method rather than making clients do get-then-update (which races).
+- **Children.** Default to revisioning a single resource's own fields, not its child hierarchy — hierarchy-aware revisions are far more expensive; reach for export instead unless truly required.
+
+### Relationships and Collective Operations
+
+When data doesn't fit one flat resource, these patterns model the relationship without contorting CRUD. Each carries a named tradeoff — pick by what you need to store and how you'll query it.
+
+- **Many-to-many: association resource vs. add/remove.** A join needs a home. Model it as a first-class **association resource** (e.g. `Membership` joining `User` and `Group`) when you must store *metadata about the relationship* (joined-at, role) or address a single link directly — it gets full CRUD and optional alias sub-collections (`/groups/{id}/users`, `/users/{id}/groups`). When the relationship is a bare fact with no metadata, prefer lightweight **`:add`/`:remove` custom methods** on a chosen *managing* resource — simpler, but you give up relationship metadata and must pick one side as managing (non-reciprocal). Adding a duplicate link → `409`; removing a missing one → `412`.
+- **Polymorphic resource: a type discriminator, not parallel resources.** When variants share lifecycle and you want to list them together (text/photo/video `Message`), use one resource with a `type` **string** field (not an enum) and a superset of fields (or one field whose meaning depends on `type`) — `ListMessages` beats interleaving `ListTextMessages` + `ListPhotoMessages`. Use independent resources instead when access patterns genuinely diverge (a broadcast vs. a chat room). Treat `type` as effectively immutable — morphing a resource's type silently breaks references that assumed the old type. Avoid polymorphic *methods*; keep the polymorphism in the resource.
+- **Singleton sub-resource: split off a part for size / security / volatility.** Move a component to a singleton child (`drivers/{id}/location`) when it's much larger than its parent, has stricter access control, or is written far more often (write contention). It's a hybrid: supports `GET`/`PATCH` like a resource but is **never created or deleted** — it exists because its parent exists and is cascade-deleted with it (no `List`). The tradeoff: you lose atomic create of parent+child; offer a `:reset` to restore defaults. If a cascading delete would surprise callers, the pattern doesn't fit.
+- **Anonymous writes for time-series.** When data points are aggregated, never individually addressed (log entries, metrics), use a `:write` custom method on the *collection* (`/chatRooms/{id}/statEntries:write`) that takes an `entry` (not `resource`), returns `void`, and assigns no id. It may be eventually consistent — return `202` rather than an LRO (you can't track an unidentified point through a pipeline, and per-point operations defeat the point of aggregating). Dedup with the request-dedup pattern if double-writes worry you.
+- **Rerunnable jobs vs. one-shot LROs.** When configurable work runs repeatedly or on a schedule, split config from execution: a `Job` resource (full CRUD, often update-omitted/immutable) holds the parameters, and a parameterless `:run` returns an LRO. This lets you (a) version config in one place, (b) separate "who may configure" from "who may run" as distinct permissions, (c) hand scheduling to the service. A plain custom-method-returning-an-LRO is fine for true one-shots.
+- **Copy/move identifier policy.** Renaming or reparenting is discouraged (referential-integrity cost), but when needed use `:copy`/`:move` custom methods, never `PUT`. **Identifier rule:** `:copy` behaves like create — honor a `destinationId` only if the API allows user-chosen ids, else server-generated (no loophole); a taken id → `409`. `:move` always knows the final id — a single `destinationId` that, without user-chosen ids, may change only the parent segment and keep the rest. Both must carry child resources along and fix up references (internal cascades, and external references are simply broken — a known cost of moving).
+
 ## Request and Response Design
 
 ### Field Rules
@@ -226,6 +264,12 @@ GET /orders?pageSize=50&pageToken=abc
 
 Use opaque page tokens; keep ordering stable; document default and max page size; avoid offset pagination for changing datasets; do not return exact total counts unless cheap and correct enough. (`pageSize`/`pageToken` are one convention — match the repo's field names if it has them.)
 
+**Cursor stability — opaque is not enough; encrypt.** A page token leaks implementation if a client can read it. Base64 is not opacity — **encrypt the token contents** so its structure (offset, last-seen key, snapshot id) is meaningless to the consumer. The moment a client can decode and hand-craft a token, the token format is part of your contract and you can no longer change how you paginate.
+
+- **Page size is a maximum, never exact.** A full page does not mean more data; an *empty page with a non-empty `nextPageToken`* is valid ("searched up to my time budget, found nothing, resume here"). **Termination is an empty `nextPageToken`, not a short page.**
+- **Token lifetime.** Tokens generally need no hard expiry (paging is idempotent — an expired token just means retry), but document a lifetime to set expectations; minutes-to-an-hour is generous. Don't promise tokens are valid forever.
+- **The smear vs. the snapshot — pick one and document it.** Data mutates while a client pages. Two honest options: (1) if the store supports point-in-time snapshots (Spanner, CockroachDB), encode the snapshot in the token for strongly-consistent pages; (2) otherwise, **document that pages are a "smear"** — concurrently added/removed rows may be seen twice or missed. Either way, use the *last-seen result* as the cursor, never a numeric offset — offsets re-show page 1 when rows are inserted at the head.
+
 ### Filtering and Sorting
 
 Filtering must be explicit, validated, and resource-local. Define allowed filter fields and operators; validate input; never expose database syntax. Make sorting fields explicit and define a default ordering.
@@ -240,6 +284,16 @@ GET /orders?filter=<anything the database accepts>          # risky
 Use batch endpoints only when they reduce real client/network pain. Preserve request order in responses; set a max batch size; keep idempotency clear. Default mutating batches to all-or-nothing; return per-item errors only when partial success is an explicit requirement.
 
 **Bulk delete by filter is the single most dangerous operation.** An empty/unset filter matches everything; a typo deletes everything. Such endpoints must default to preview/validate-only and require an explicit `force` flag to execute; design the default so a missing filter or flag deletes *nothing*. Return a never-under-reported match count plus a sample of matching IDs to spot-check.
+
+### Import and Export
+
+Move data **directly between the API and an external store** (S3, Samba, GCS), cutting out a client that round-trips every byte. `:import`/`:export` are per-resource custom methods returning LROs. **Import/export is not backup/restore** — it makes no snapshot, consistency, or full-replacement guarantee; re-importing the same data creates duplicates by design.
+
+- **Two orthogonal config objects, by design.** Separate *transport* from *transformation*: a polymorphic `DataSource`/`DataDestination` (how to reach the store — discriminated by a `type` field: `S3DataSource`, `SambaDataSource`) and an `InputConfig`/`OutputConfig` (how to (de)serialize — `contentType` json/csv, `compressionFormat` zip/bz2, file-splitting). Do **not** flatten these into one struct with reused fields (`password` for both an S3 secret and a Samba login) — that breeds confusion and couples unrelated stores. Keep `filter` *next to* (not inside) `OutputConfig` — it selects rows before serialization runs.
+- **Source globs, destination prefixes.** A source reads many files (a glob, `archive-*.gz`); a destination writes under a path prefix / filename template. They overlap but are not identical — keep them separate interfaces so each evolves independently.
+- **Identifiers.** If the API doesn't allow user-chosen ids, **ignore the `id` on import** (it behaves like batch-create). Keep ids *on export* so you can trace provenance.
+- **Retry with `importRequestId`.** Export retry is safe (independent attempt; leave partial output for the owner to judge — you can't know what fraction is "enough"). Import retry is not: a failed run may have created rows, so a naive retry duplicates them. Wrap in a transaction where the store supports it; otherwise stamp each record with a client-supplied `importRequestId` the service caches and dedups against (see Idempotency).
+- **One resource type, no filtering on the way in.** Import/export operate on a single resource type with no children — wanting parent+child is the signal you actually want backup/restore. Filter on *export* (it's just a `List`); do **not** filter on *import* (it forces ingress data through business logic and breaks on service-computed fields — let the user pre-filter).
 
 ## Error Design
 
@@ -292,6 +346,16 @@ Use optimistic concurrency when clients update shared resources: `ETag` + `If-Ma
 
 On mismatch, default to `412 Precondition Failed` for a failed `If-Match`/ETag precondition; use `409 Conflict` for broader state conflicts (see Defaults Table).
 
+### Caching and Conditional Requests
+
+The same `ETag` has a **second, distinct use**: cutting read cost. Concurrency uses `If-Match` → `412` to *guard a write*; caching uses `If-None-Match` → `304` to *skip regenerating a read*. Don't conflate them.
+
+- **Conditional GET.** Client sends back the last `ETag` as `If-None-Match`; if unchanged the server returns `304 Not Modified` with no body. This still costs a round trip — its payoff is **avoiding expensive regeneration** (heavy queries) and bandwidth, not avoiding the network. Worth it when building the response is costly.
+- **TTL hints.** Let the origin tell clients how long data is fresh via `Cache-Control: max-age=...` (or `Expires` for an absolute timestamp). A single one-size-fits-all TTL per resource type is the sane default; per-response tuning (shorter TTL for volatile rows) is an optimization, not a starting point.
+- **Invalidation menu — pick by tolerance for staleness.** **TTL**: simplest, but you serve stale data for up to the whole window after an origin change. **Notification-based** (events evict entries): smallest stale window, but needs a broker and a heartbeat to detect a dead notification path. **Write-through** (update cache and origin together): near-zero stale window, practical mainly server-side. Default to TTL; escalate only when staleness actually hurts.
+- **Cache the fewest places possible** (ideal: zero). Stacked caches (client + server + CDN + browser) compound staleness and make freshness impossible to reason about.
+- **Gotcha — a broken deploy can poison caches forever.** If a release bug stops your code from setting cache headers and a downstream emits `Expires: Never`, that response sticks in browser/CDN/ISP caches you don't control — fixing the code and clearing your own cache is *not enough*. The only recovery is changing the URL. Never let a canary/release path silently fall through its cache-header logic; treat cache headers as part of the contract a release must not break.
+
 ## Security Manual
 
 Security starts in API design. Edge/gateway validation is defense-in-depth, not the authority — **every service independently validates and authorizes regardless of edge checks** ("trust, but verify").
@@ -300,6 +364,8 @@ Security starts in API design. Edge/gateway validation is defense-in-depth, not 
 
 For any sensitive or public API: identify assets → actors (users, admins, services, partners, attackers) → trust boundaries → entry points → sensitive data fields → abuse cases → controls → verify controls with tests.
 
+**Use named frameworks; don't freestyle.** Drive the exercise from a data-flow diagram and apply **STRIDE per element** — walk every process and data flow and ask which of Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege applies there (per element, not once for the whole system). Anchor the *objective* in the **OWASP API Security Top 10** (broken object-level / function-level authorization, broken authentication, mass assignment, excessive data exposure, etc.) — verify your design mitigates each. Then prioritize with **DREAD scoring**: rate each threat 1–10 on Damage, Reproducibility, Exploitability, Affected users, Discoverability and rank by the average — define what each score means up front so ratings are consistent (and consider dropping Discoverability → DREAD-D, since relying on obscurity is not a control). Validate after mitigations; re-review on change.
+
 Minimum controls: authentication; authorization per endpoint *and* per resource; input validation; output encoding where relevant; rate limits/quotas for abuse-prone endpoints; request size limits; TLS (decide where it terminates and whether internal hops need mTLS); safe error responses; audit logs for sensitive actions; secrets outside code, rotated, revocable, short-lived where practical.
 
 ### Authentication
@@ -307,6 +373,12 @@ Minimum controls: authentication; authorization per endpoint *and* per resource;
 Use the platform standard. If choosing: browser/mobile users → OAuth2/OIDC authorization code + PKCE; service-to-service → mTLS, workload identity, signed tokens, or OAuth2 client credentials; partners → client credentials or signed requests with key rotation; webhooks → signature verification, timestamp tolerance, replay protection.
 
 **Never use ID tokens as access tokens** — ID tokens convey user identity to the client, not authorization to call resources.
+
+**Request signing — three tiers, by what you need to prove.** When a bearer token isn't enough (partner/server callers, message integrity, non-repudiation), choose:
+
+- **OAuth2 bearer tokens** — default for most callers. Proves the bearer *holds a token*; the token itself is the secret, so anyone who captures it can replay. Lean on TLS and short lifetimes.
+- **HMAC (shared secret)** — sign a request fingerprint with a secret both sides hold. Proves origin *and* integrity (tampering invalidates the signature) and is fine for the majority of partner cases. But it's **symmetric**: the verifier holds the same key that signs, so it cannot prove to a *third party* that the client (not the server) produced the request — no non-repudiation.
+- **Digital signature / HTTP request fingerprinting** — client signs with a *private* key; server verifies with the registered *public* key. Asymmetric, so it adds **non-repudiation** (only the client could have signed) on top of origin + integrity. Sign a canonical fingerprint — `(request-target)` (method + path), `host`, `date`, and a `digest` (hash of the body, so you don't sign the whole payload) — not the raw serialized body, whose byte form varies (key order, encoding) and breaks verification. The client generates the keypair (the private key must never reach the server, or non-repudiation is lost). Reserve this for when a disinterested party must later verify the sender; it's heavier than HMAC.
 
 ### Authorization
 
@@ -511,9 +583,9 @@ Start by stating assumptions and missing information (ask only on breaking/irrev
 
 ## Appendix: Sources (for human maintainers)
 
-Synthesized from four converted books in this folder. These pointers are for a maintainer reopening the sources — they are not needed by an agent operating from this manual alone.
+Synthesized offline from four books. These pointers are for a maintainer reopening the sources — they are not needed by an agent operating from this manual alone.
 
-- `GDP` — Geewax, *API Design Patterns* (Manning 2021): resource design, naming, IDs, standard/custom methods, field masks, pagination, filtering, batch, import/export, versioning, idempotency/request-dedup, LROs, purge/validateOnly, revisions.
-- `MAA` — Gough/Bryant/Auburn, *Mastering API Architecture* (O'Reilly 2022): contracts/OpenAPI, REST vs gRPC, traffic patterns, ADRs, gateways/mesh and their anti-patterns, contract/component testing, release, observability, threat modeling, OAuth2/OIDC, mass assignment, evolution, zero trust.
-- `BM` — Newman, *Building Microservices* 2e (O'Reilly 2021): boundaries, coupling taxonomy, communication, sagas, CAP per-capability, cascading failure/bulkheads, confused deputy, CDC, migration patterns, breaking-change avoidance.
+- `GDP` — Geewax, *API Design Patterns* (Manning 2021): resource design, naming, IDs, standard/custom methods, field masks, pagination (cursor stability/opaque-encrypted tokens), filtering, batch, import/export, versioning, idempotency/request-dedup, LROs (cancel/pause/resume), purge/validateOnly, soft deletion, revisions, singleton sub-resources, association vs add/remove, polymorphism, anonymous writes, rerunnable jobs, copy/move, request authentication (digital signatures).
+- `MAA` — Gough/Bryant/Auburn, *Mastering API Architecture* (O'Reilly 2022): contracts/OpenAPI, REST vs gRPC, traffic patterns, ADRs, gateways/mesh and their anti-patterns, contract/component testing, release, observability, threat modeling (STRIDE-per-element, OWASP API Top 10, DREAD), OAuth2/OIDC, mass assignment, evolution, zero trust.
+- `BM` — Newman, *Building Microservices* 2e (O'Reilly 2021): boundaries, coupling taxonomy, communication, sagas, CAP per-capability, cascading failure/bulkheads, confused deputy, CDC, migration patterns, breaking-change avoidance, caching/conditional requests/invalidation.
 - `BMN` — Kapexhiu, *Building Microservices with Node.js* (Packt 2024): Node implementation, event loop, graceful shutdown, health checks, Joi validation, security headers, circuit breakers in code, observability.

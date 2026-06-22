@@ -1,0 +1,96 @@
+# api-compat.yml — schema-diff compatibility gate for pull requests.
+#
+# Implements the manual's "schema-diff compatibility gate in CI" (Release and
+# Evolution). On every PR that touches the OpenAPI spec, it diffs the PR's spec
+# against the version on the target branch and FAILS THE BUILD on a breaking
+# change, via scripts/schema-diff.sh.
+#
+# Copy this file into your repo at .github/workflows/api-compat.yml.
+# Set SPEC_PATH below to your spec's path. For a proto API, see the commented
+# "proto" job at the bottom.
+name: api-compat
+
+on:
+  pull_request:
+    # Narrow to spec changes; widen if your spec is generated from code.
+    paths:
+      - "openapi.yaml"
+      - "openapi.yml"
+      - "openapi.json"
+      - "**/openapi.*"
+      - "api/**"
+
+# Least privilege: the gate only needs to read the code.
+permissions:
+  contents: read
+
+env:
+  # Path to the OpenAPI spec in this repo. Change to match your layout.
+  SPEC_PATH: openapi.yaml
+
+jobs:
+  openapi-breaking-change:
+    name: OpenAPI breaking-change gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          # Need the merge-base so we can extract the base-branch spec below.
+          fetch-depth: 0
+
+      - name: Install oasdiff
+        run: |
+          set -euo pipefail
+          # Pinned install of the breaking-change differ the gate expects.
+          curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh -s
+          oasdiff --version
+
+      - name: Extract base-branch spec
+        run: |
+          set -euo pipefail
+          base_ref="${{ github.event.pull_request.base.ref }}"
+          git fetch --no-tags --depth=1 origin "$base_ref"
+          if git show "origin/${base_ref}:${SPEC_PATH}" > openapi.base.yaml 2>/dev/null; then
+            echo "Extracted base spec from origin/${base_ref}:${SPEC_PATH}"
+          else
+            # New spec file added in this PR => nothing to break. Pass.
+            echo "No base spec on origin/${base_ref} — treating as a new API (no breaking change possible)."
+            echo "NO_BASE=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run schema-diff gate
+        if: env.NO_BASE != '1'
+        run: |
+          set -euo pipefail
+          chmod +x scripts/schema-diff.sh
+          # Exits non-zero on a breaking change, which fails this step and the PR.
+          ./scripts/schema-diff.sh openapi.base.yaml "${SPEC_PATH}"
+
+      - name: Result
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "::notice::API compatibility gate passed — no breaking change."
+          else
+            echo "::error::API compatibility gate failed — breaking change detected. See oasdiff output above. Prefer an expansion change or expand-and-contract; version only as a last resort."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # PROTO variant — uncomment and adjust if your contract is protobuf.
+  # Requires a committed proto.lock baseline (run `protolock init` once).
+  #
+  # proto-breaking-change:
+  #   name: Proto breaking-change gate
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install protolock
+  #       run: go install github.com/nilslice/protolock/cmd/protolock@latest
+  #     - name: Run schema-diff gate (proto)
+  #       run: |
+  #         set -euo pipefail
+  #         chmod +x scripts/schema-diff.sh
+  #         export PATH="$(go env GOPATH)/bin:$PATH"
+  #         ./scripts/schema-diff.sh --proto .   # uses the committed proto.lock
+  # ---------------------------------------------------------------------------

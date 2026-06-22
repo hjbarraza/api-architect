@@ -6,7 +6,7 @@ description: This skill should be used when the user asks to "implement an API",
 <objective>
 Turn an approved API design into correct, resilient server code: layered structure, ordered middleware, idempotent mutations, retry-and-failure handling on every outbound call, optimistic concurrency, and a stable error contract. This is the IMPLEMENT phase — design decisions are assumed settled (route them back to api-design if not).
 
-The manual is the source of truth. **If this skill and the manual disagree, the manual wins.** This router never restates manual content — it points into the exact sections and enforces that they are read before code is written.
+This router never restates manual content — it points into the exact sections and enforces that they are read live before code is written. (The umbrella api-architect skill states the manual's authority once for the whole plugin.)
 </objective>
 
 <quick_start>
@@ -88,6 +88,16 @@ Apply this order regardless of which row routed the task:
 **Step 5 — Make responses agent-actionable.** Per the addendum: lean response bodies, idempotent tools, errors that distinguish retryable from terminal. Emit `Retry-After` on `429`/`503`.
 
 **Step 6 — Verify against the manual's bar, not just green gates.** `tsc`/lint/build/tests passing is necessary, not sufficient. Confirm a concrete runtime observation where feasible (a response body, an idempotent-replay returning the cached result, a `412` on a stale `If-Match`). If runtime verification is not possible, say so plainly.
+
+For the live runtime check, run the bundled smoke-verify script against the running endpoint. It captures the real status/headers/body and, when `--spec` is given, validates **that captured body** against the OpenAPI operation's response schema for the method+path+status (an embedded `jsonschema` check; needs `python3` + the `jsonschema` package, plus PyYAML for YAML specs). If those are missing it prints the body and reports validation SKIPPED — it never claims the contract was verified when it was not:
+
+```sh
+scripts/smoke-verify.sh --url <URL> --expect <CODE> --spec <openapi.yaml>
+# e.g. scripts/smoke-verify.sh --url http://localhost:8080/v1/orders --method POST \
+#        --data '{"sku":"abc","qty":1}' --expect 201 --header "Authorization: Bearer $TOKEN" --spec openapi.yaml
+```
+
+Its non-zero exit on status mismatch or captured-body schema failure is the runtime observation that backs a "works" claim.
 </process>
 
 <security_checklist>
@@ -118,5 +128,5 @@ The implementation is complete when:
 - Every synchronous outbound call has a timeout, bulkhead, and circuit breaker.
 - The error contract matches the repo/manual shape; responses are lean and errors are machine-actionable; `Retry-After` is emitted where required.
 - The security checklist passes (mass-assignment allow-list, edge validation, per-resource authorization, no leaked internals).
-- A concrete runtime observation backs any "works" claim — or the absence of one is stated explicitly.
+- A concrete runtime observation backs any "works" claim — ideally `scripts/smoke-verify.sh` against the live endpoint — or the absence of one is stated explicitly.
 </success_criteria>
