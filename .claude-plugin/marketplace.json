@@ -1,0 +1,14 @@
+{
+  "name": "api-architect",
+  "owner": {
+    "name": "hjbarraza",
+    "url": "https://github.com/hjbarraza"
+  },
+  "plugins": [
+    {
+      "name": "api-architect",
+      "source": "./",
+      "description": "Skills and agents for designing, implementing, reviewing, and evolving APIs — manual-driven, contract-first, with reviewer agents that verify behavior."
+    }
+  ]
+}

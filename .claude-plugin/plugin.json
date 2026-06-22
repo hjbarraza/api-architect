@@ -1,0 +1,19 @@
+{
+  "name": "api-architect",
+  "version": "0.1.0",
+  "description": "Skills and agents for designing, implementing, reviewing, and evolving APIs — manual-driven, contract-first, with reviewer agents that verify behavior.",
+  "author": {
+    "name": "hjbarraza",
+    "url": "https://github.com/hjbarraza"
+  },
+  "keywords": [
+    "api",
+    "api-design",
+    "rest",
+    "openapi",
+    "contract-first",
+    "code-review",
+    "backend",
+    "architecture"
+  ]
+}
