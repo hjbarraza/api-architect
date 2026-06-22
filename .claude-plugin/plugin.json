@@ -3,8 +3,9 @@
   "version": "0.2.0",
   "description": "Manual-driven, contract-first plugin for the full API lifecycle — design, implement, test, review, document, evolve, discover — with reviewer agents, a manual-injection hook, schema-diff/smoke-verify scripts, and a compatibility Action.",
   "author": {
-    "name": "hjbarraza",
-    "url": "https://github.com/hjbarraza"
+    "name": "Yuno",
+    "email": "hj.barraza@gmail.com",
+    "url": "https://yuno.to"
   },
   "keywords": [
     "api",

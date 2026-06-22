@@ -119,4 +119,4 @@ api-architect/
 
 ---
 
-<div align="center"><sub>Manual-driven · contract-first · agent-native · built for Claude&nbsp;Code</sub></div>
+<div align="center"><sub>Built by <a href="https://yuno.to">Yuno</a> — AI development — for Claude&nbsp;Code · manual-driven · contract-first · agent-native</sub></div>
